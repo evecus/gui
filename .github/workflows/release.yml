@@ -1,175 +1,57 @@
-name: Build GUI.for.SingBox
+name: Build SingBox Web Server
 
 on:
   push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: write
+    branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
-  Build-Frontend:
+  build:
     runs-on: ubuntu-latest
-    if: github.repository == 'GUI-for-Cores/GUI.for.SingBox'
-    steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "latest"
-          cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: |
-          cd frontend
-          pnpm install --frozen-lockfile
-          pnpm build-only
-      - uses: actions/upload-artifact@v6
-        with:
-          name: frontend-dist
-          path: frontend/dist
 
-  Build-Windows:
-    needs: Build-Frontend
-    runs-on: windows-latest
-    env:
-      APP_NAME: GUI.for.SingBox
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - uses: actions/download-artifact@v8
-        with:
-          name: frontend-dist
-          path: frontend/dist
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Build & Pack Windows
-        shell: pwsh
+      # --- 1. 构建前端 ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Build Frontend
+        working-directory: ./frontend
         run: |
-          function Build-And-Pack {
-            param([string]$arch)
-            $env:GOOS="windows"
-            $env:GOARCH=$arch
+          pnpm install
+          pnpm build
 
-            Write-Host "==> Building Windows $arch..."
-            ~/go/bin/wails build -m -s -trimpath -skipbindings -devtools -o "$env:APP_NAME.exe"
+      # --- 2. 核心：处理前端产物 ---
+      # 如果你的 Go 代码是通过 embed 引用 frontend/dist，这一步通常不需要额外操作。
+      # 但如果你的 Go 代码在根目录找 dist，需要拷贝一下：
+      # - name: Copy Frontend Dist to Root
+      #   run: cp -r ./frontend/dist ./dist
 
-            cd build/bin
-            $zipName = "$env:APP_NAME-windows-$arch.zip"
-            Compress-Archive -Path "$env:APP_NAME.exe" -DestinationPath $zipName -Force
-            cd ../..
-          }
-
-          $arches = @("amd64","arm64","386")
-          foreach ($arch in $arches) { Build-And-Pack $arch }
-
-      - uses: actions/upload-artifact@v6
+      # --- 3. 编译 Go 后端 ---
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          name: windows-builds
-          path: build/bin/*.zip
+          go-version: '1.22' # 建议用较新版本以支持更好的 embed
+          cache: true
 
-  Build-macOS:
-    needs: Build-Frontend
-    runs-on: macos-latest
-    env:
-      APP_NAME: GUI.for.SingBox
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - uses: actions/download-artifact@v8
-        with:
-          name: frontend-dist
-          path: frontend/dist
-      - run: |
-          go mod vendor
-          sed -i "" "s/\[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular\]/[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory]/g" vendor/github.com/wailsapp/wails/v2/internal/frontend/desktop/darwin/AppDelegate.m
-
-      - name: Build & Pack macOS
+      - name: Build Backend
         run: |
-          build_and_pack() {
-            arch=$1
-            export GOOS=darwin GOARCH=$arch
+          go mod tidy
+          # 针对 Linux 服务器环境构建（一般网页端都跑在 Linux 上）
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o singbox-web-server .
 
-            echo "==> Building macOS $arch..."
-            ~/go/bin/wails build -m -s -trimpath -skipbindings -devtools -o $APP_NAME.exe
-
-            cd build/bin
-            zip -q -r $APP_NAME-darwin-$arch.zip $APP_NAME.app
-            cd ../..
-          }
-
-          for arch in amd64 arm64; do build_and_pack $arch; done
-
-      - uses: actions/upload-artifact@v6
+      # --- 4. 归档产物 ---
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
         with:
-          name: macos-builds
-          path: build/bin/*.zip
-
-  Build-Linux:
-    needs: Build-Frontend
-    runs-on: ubuntu-latest
-    env:
-      APP_NAME: GUI.for.SingBox
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          check-latest: true
-      - run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-      - uses: actions/download-artifact@v8
-        with:
-          name: frontend-dist
-          path: frontend/dist
-      - run: |
-          sudo apt-get update
-          sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev
-
-      - name: Build & Pack Linux
-        run: |
-          build_and_pack() {
-            arch=$1
-            export GOOS=linux GOARCH=$arch
-
-            echo "==> Building Linux $arch..."
-            ~/go/bin/wails build -m -s -trimpath -skipbindings -devtools -tags webkit2_41 -o $APP_NAME.exe
-
-            cd build/bin
-            mv $APP_NAME.exe $APP_NAME
-            zip $APP_NAME-linux-$arch.zip $APP_NAME
-            cd ../..
-          }
-
-          build_and_pack amd64
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: linux-builds
-          path: build/bin/*.zip
-
-  Release:
-    needs: [Build-Windows, Build-macOS, Build-Linux]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: release-assets
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          files: release-assets/**/*.zip
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'dev') }}
-          body: |
-            Auto-generated release from GitHub Actions.
+          name: server-bin
+          path: singbox-web-server
