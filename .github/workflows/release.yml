@@ -13,40 +13,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --- 1. 构建前端 ---
+      # --- 1. 环境准备：Node.js & Pnpm v9 ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # 匹配你依赖中的 @tsconfig/node24
 
       - name: Install Pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4 # 升级到 v4 以支持 pnpm 9
         with:
-          version: 8
+          version: 9 # 必须是 9，因为你的 lockfile 是 9.0
+          run_install: false
 
+      # --- 2. 构建前端 ---
       - name: Build Frontend
         working-directory: ./frontend
         run: |
-          pnpm install
+          # 使用 --frozen-lockfile 确保环境一致性，如果报错再换成 install
+          pnpm install --frozen-lockfile
           pnpm build
-
-      # --- 2. 核心：处理前端产物 ---
-      # 如果你的 Go 代码是通过 embed 引用 frontend/dist，这一步通常不需要额外操作。
-      # 但如果你的 Go 代码在根目录找 dist，需要拷贝一下：
-      # - name: Copy Frontend Dist to Root
-      #   run: cp -r ./frontend/dist ./dist
 
       # --- 3. 编译 Go 后端 ---
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # 建议用较新版本以支持更好的 embed
+          go-version: '1.22'
           cache: true
 
       - name: Build Backend
         run: |
           go mod tidy
-          # 针对 Linux 服务器环境构建（一般网页端都跑在 Linux 上）
+          # 针对 Linux 服务器环境构建
           GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o singbox-web-server .
 
       # --- 4. 归档产物 ---
