@@ -1,0 +1,4 @@
+build/bin
+frontend/dist
+
+.DS_Store
